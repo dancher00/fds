@@ -15,6 +15,11 @@ Diagnostic messages, for the people running the service. A failed request record
 which endpoint it was, and a full stack trace. These exist to get a bug fixed and are of no
 interest once it is.
 
+At `FDS_LOG_LEVEL=DEBUG`, `auth.scopes_filtered` records the `issuer` and
+`dropped_scopes` when the issuer's `allowed_scopes` removes permissions from a
+token, including app roles. The line carries the request's hashed `actor_id`.
+It is omitted when no scopes are dropped and at the default `INFO` level.
+
 ### Who changed what
 
 Every create, update and delete leaves a record naming the person who made it, the thing they

@@ -14,6 +14,13 @@ from app.auth.security import (
     get_token_claims,
 )
 from app.core.config import TrustedIdP, config
+from app.core.context import get_actor, request_context
+
+
+@pytest.fixture
+def debug_log_lines(monkeypatch, request):
+    monkeypatch.setattr(config, "LOG_LEVEL", "DEBUG")
+    return request.getfixturevalue("log_lines")
 
 
 @pytest.mark.asyncio
@@ -202,3 +209,73 @@ def test_filter_scopes_case_sensitivity(mocker):
 
     assert "jet:read" in filtered
     assert "JET:READ" not in filtered
+
+
+@pytest.mark.parametrize(
+    ("allowed", "scopes", "kept", "dropped"),
+    [
+        (["read"], ["read", "write", "admin"], ("read",), ["write", "admin"]),
+        (["jet:*"], ["jet:read", "mast:read"], ("jet:read",), ["mast:read"]),
+        (["jet:*"], ["jet:read", "JET:READ"], ("jet:read",), ["JET:READ"]),
+        ([], ["read", "admin"], (), ["read", "admin"]),
+        (["*"], ["read", "admin"], ("read", "admin"), []),
+        ([], [], (), []),
+    ],
+)
+def test_filter_scopes_logs_only_dropped_scopes(
+    monkeypatch, debug_log_lines, allowed, scopes, kept, dropped
+):
+    issuer = "https://trust.com"
+    monkeypatch.setattr(
+        config, "TRUSTED_IDPS", [TrustedIdP(issuer=issuer, allowed_scopes=allowed)]
+    )
+
+    assert _filter_scopes(scopes, issuer) == kept
+
+    lines = debug_log_lines()
+    if dropped:
+        (line,) = lines
+        assert line["event"] == "auth.scopes_filtered"
+        assert line["level"] == "debug"
+        assert line["issuer"] == issuer
+        assert line["dropped_scopes"] == dropped
+    else:
+        assert lines == []
+
+
+def test_filter_scopes_does_not_log_at_info(monkeypatch, request):
+    monkeypatch.setattr(config, "LOG_LEVEL", "INFO")
+    log_lines = request.getfixturevalue("log_lines")
+    monkeypatch.setattr(config, "TRUSTED_IDPS", [TrustedIdP(issuer="https://trust.com")])
+
+    assert _filter_scopes(["fds-admin"], "https://trust.com") == ()
+
+    assert log_lines() == []
+
+
+async def test_filtered_scopes_log_carries_current_actor(monkeypatch, debug_log_lines):
+    issuer = "https://trust.com"
+    subject = "private-subject"
+    monkeypatch.setattr(
+        config, "TRUSTED_IDPS", [TrustedIdP(issuer=issuer, allowed_scopes=["read"])]
+    )
+    claims: TokenClaims = {
+        "iss": issuer,
+        "sub": subject,
+        "scope": "read write",
+        "roles": ["fds-admin"],
+    }
+
+    with request_context():
+        user = await get_current_user(claims=claims)
+        assert get_actor() == user
+        assert user.scopes == ("read",)
+
+    (line,) = debug_log_lines()
+    assert line["event"] == "auth.scopes_filtered"
+    assert line["level"] == "debug"
+    assert line["issuer"] == issuer
+    assert line["dropped_scopes"] == ["write", "fds-admin"]
+    assert line["actor_id"] == _hash_user_id(issuer, subject)
+    assert line["actor_issuer"] == issuer
+    assert subject not in str(line)

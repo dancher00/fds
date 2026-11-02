@@ -3,6 +3,7 @@ import hashlib
 from typing import NotRequired, TypedDict, cast
 
 import jwt
+import structlog
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import ValidationError
@@ -12,6 +13,8 @@ from app.auth.jwks import JWKSClientDep
 from app.core.config import config
 from app.core.context import set_actor
 from app.models.identity import ANONYMOUS_USER, AuthenticatedUser
+
+logger = structlog.get_logger(__name__)
 
 # This creates the security scheme. It simply looks for an
 # 'Authorization: Bearer <token>' header.
@@ -90,12 +93,17 @@ def _filter_scopes(raw_scopes: list[str], issuer: str) -> tuple[str, ...]:
         return ()
 
     final_scopes: list[str] = []
+    dropped_scopes: list[str] = []
     for scope in raw_scopes:
         if any(
             fnmatch.fnmatchcase(scope, pattern)
             for pattern in trusted_idp.allowed_scopes
         ):
             final_scopes.append(scope)
+        else:
+            dropped_scopes.append(scope)
+    if dropped_scopes:
+        logger.debug("auth.scopes_filtered", issuer=issuer, dropped_scopes=dropped_scopes)
     return tuple(final_scopes)
 
 
@@ -118,8 +126,10 @@ async def get_current_user(
     raw_scopes = _extract_scopes(claims)
     issuer = claims["iss"]
     subject = claims.get("sub", "")
-    final_scopes = _filter_scopes(raw_scopes, issuer)
     hashed_id = _hash_user_id(issuer, subject)
+    # Scope-filter diagnostics need the actor before their first log line.
+    set_actor(AuthenticatedUser(id=hashed_id, issuer=issuer))
+    final_scopes = _filter_scopes(raw_scopes, issuer)
 
     user = AuthenticatedUser(id=hashed_id, scopes=final_scopes, issuer=issuer)
     # Publishes the actor to every log line emitted for this request.
