@@ -4,6 +4,11 @@ The core discovery object. A **Dataset** is the abstract metadata entity describ
 
 ## Dataset
 
+Renaming a dataset with `PATCH` uses the same uniqueness rules as creating it:
+a duplicate name in the same device/shot context returns 409. Different
+activities may produce datasets with the same name; datasets without an
+activity may share a name when they come from different catalogue origins.
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | string | Yes | Short name, unique within its scope (e.g. `equilibrium`) |

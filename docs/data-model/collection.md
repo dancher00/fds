@@ -2,6 +2,10 @@
 
 A named, citable group of Datasets.
 
+Renaming a collection with `PATCH` uses the same uniqueness rules as creating
+it: a name already taken in the same device/shot context returns 409. The
+existing name can be sent unchanged when updating other fields.
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | string | Yes | Short name, unique within its scope (e.g. `analysed-data`, `jintrac-30420-56`) |

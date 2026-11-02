@@ -316,7 +316,13 @@ class DatasetService(BaseService[Dataset, DatasetCreate, DatasetUpdate]):
                 raise DeviceNotFoundError(f"Device '{obj_in.device_name}' not found")
         self._authorize_write(obj_in.device_name, user)
 
-    def _reject_duplicate(self, obj_in: DatasetCreate, origin: str | None) -> None:
+    def _reject_duplicate(
+        self,
+        obj_in: DatasetCreate | Dataset,
+        origin: str | None,
+        *,
+        exclude_id: int | None = None,
+    ) -> None:
         """Reject an exact duplicate up front so a re-POST of an identical dataset
         reads as 409 (already exists) rather than the reference-overlap 422 that
         validation would raise first — a version trivially overlaps itself, which
@@ -326,6 +332,8 @@ class DatasetService(BaseService[Dataset, DatasetCreate, DatasetUpdate]):
             Dataset.device_name == obj_in.device_name,
             Dataset.shot_id == obj_in.shot_id,
         )
+        if exclude_id is not None:
+            duplicate = duplicate.where(Dataset.id != exclude_id)
         if obj_in.activity_id is not None:
             duplicate = duplicate.where(Dataset.activity_id == obj_in.activity_id)
         else:
@@ -647,6 +655,10 @@ class DatasetService(BaseService[Dataset, DatasetCreate, DatasetUpdate]):
             effective_allowed_idps,
         )
 
+        self._reject_duplicate(
+            db_obj.model_copy(update=update_data), db_obj.origin, exclude_id=id
+        )
+
         # Re-validate reference resources against the merged state.
         effective_applies_to = update_data.get("applies_to", db_obj.applies_to)
         for kind in REFERENCE_KINDS:
@@ -697,7 +709,8 @@ class DatasetService(BaseService[Dataset, DatasetCreate, DatasetUpdate]):
                     self.session, DatasetReplacement, db_obj.id, wanted
                 )
 
-        return self.update_unchecked(db_obj=db_obj, obj_in=obj_in)
+        db_obj.sqlmodel_update(update_data)
+        return self._persist(db_obj, db_obj.name)
 
     def delete(self, id: int, user: AuthenticatedUser) -> bool:
         """

@@ -207,6 +207,17 @@ class CollectionService(BaseService[Collection, CollectionCreate, CollectionUpda
             effective_allowed_idps,
         )
 
+        name = update_data.get("name", db_obj.name)
+        duplicate = select(Collection).where(
+            Collection.id != id,
+            Collection.name == name,
+            Collection.device_name
+            == update_data.get("device_name", db_obj.device_name),
+            Collection.shot_id == update_data.get("shot_id", db_obj.shot_id),
+        )
+        if self.session.exec(duplicate).first() is not None:
+            raise ConflictError(f"Collection '{name}' already exists in this context")
+
         # ``replaces`` is kept in the collectionreplacement table, not on the
         # collection row, so the update below skips it and the links are
         # written here.
@@ -226,7 +237,13 @@ class CollectionService(BaseService[Collection, CollectionCreate, CollectionUpda
                 self.session, CollectionReplacement, db_obj.id, wanted
             )
 
-        return self.update_unchecked(db_obj=db_obj, obj_in=obj_in)
+        try:
+            return self.update_unchecked(db_obj=db_obj, obj_in=obj_in)
+        except IntegrityError as e:
+            self.session.rollback()
+            raise ConflictError(
+                f"Collection '{name}' already exists in this context"
+            ) from e
 
     def delete(self, id: int, user: AuthenticatedUser) -> bool:
         """Delete a Collection by internal ID.
