@@ -44,6 +44,8 @@ The same field on a hand-curated collection describes what the selection was cho
 
 Collections support nesting (a Collection can contain other Collections) and a Dataset can belong to multiple Collections. The Dataset's URI is independent of its collection membership, so adding or moving a dataset never changes its URL.
 
+Nest a child with `POST /collections/{parent_id}/collections/{child_id}`. Nesting returns 422 if it would create a cycle: a collection cannot contain itself, directly or through other collections. A child may belong to multiple parents as long as that does not create a cycle.
+
 Create a Collection, then add its member Datasets by id, one bodyless `POST` per dataset:
 
 === "curl"

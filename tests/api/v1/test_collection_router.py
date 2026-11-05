@@ -1,11 +1,13 @@
 from datetime import UTC, datetime
+from itertools import pairwise
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.auth.security import AuthenticatedUser
 from app.models.activity import ActivityCreate, ActivityType
-from app.models.collection import CollectionCreate
+from app.models.collection import CollectionCreate, CollectionMember
 from app.models.dataset import DatasetCreate
 from app.models.device import DeviceCreate
 from app.models.file_access import S3Credentials
@@ -732,6 +734,111 @@ def test_add_child_collection_self_reference_returns_422(
         headers=admin_user_token,
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("length", [2, 4])
+def test_add_child_collection_cycle_returns_422(
+    test_client: TestClient, session: Session, admin_user_token: dict, length: int
+):
+    ids = [_make_collection(session, f"chain-{i}") for i in range(length)]
+    for parent, child in pairwise(ids):
+        response = test_client.post(
+            f"/v1/collections/{parent}/collections/{child}",
+            headers=admin_user_token,
+        )
+        assert response.status_code == 201
+
+    response = test_client.post(
+        f"/v1/collections/{ids[-1]}/collections/{ids[0]}",
+        headers=admin_user_token,
+    )
+    assert response.status_code == 422
+    assert "cycle" in response.json()["detail"]
+    assert session.get(CollectionMember, (ids[-1], ids[0])) is None
+    for parent, child in pairwise(ids):
+        assert session.get(CollectionMember, (parent, child)) is not None
+
+
+def test_add_child_collection_allows_shared_descendants(
+    test_client: TestClient, session: Session, admin_user_token: dict
+):
+    root, left, right, leaf = [
+        _make_collection(session, name) for name in ("root", "left", "right", "leaf")
+    ]
+    for parent, child in (
+        (left, leaf),
+        (right, leaf),
+        (root, left),
+        (root, right),
+        (root, leaf),
+    ):
+        response = test_client.post(
+            f"/v1/collections/{parent}/collections/{child}",
+            headers=admin_user_token,
+        )
+        assert response.status_code == 201
+
+
+@pytest.mark.parametrize("closes_cycle", [False, True])
+def test_add_child_collection_handles_an_existing_cycle(
+    test_client: TestClient,
+    session: Session,
+    admin_user_token: dict,
+    closes_cycle: bool,
+):
+    first, second, descendant, unrelated = [
+        _make_collection(session, name)
+        for name in ("first", "second", "descendant", "unrelated")
+    ]
+    # Legacy databases may contain cycles created before validation existed.
+    session.add_all(
+        [
+            CollectionMember(parent_id=first, child_id=second),
+            CollectionMember(parent_id=second, child_id=first),
+            CollectionMember(parent_id=second, child_id=descendant),
+        ]
+    )
+    session.commit()
+
+    parent = descendant if closes_cycle else unrelated
+    response = test_client.post(
+        f"/v1/collections/{parent}/collections/{first}",
+        headers=admin_user_token,
+    )
+    assert response.status_code == (422 if closes_cycle else 201)
+
+
+@pytest.mark.parametrize("accept", ["application/json", "application/ld+json"])
+def test_collection_read_handles_an_existing_cycle(
+    test_client: TestClient, session: Session, admin_user_token: dict, accept: str
+):
+    first = _make_collection(session, "first")
+    second = _make_collection(session, "second")
+    session.add_all(
+        [
+            CollectionMember(parent_id=first, child_id=second),
+            CollectionMember(parent_id=second, child_id=first),
+        ]
+    )
+    session.commit()
+
+    response = test_client.get(
+        f"/v1/collections/id/{first}",
+        headers={**admin_user_token, "Accept": accept},
+    )
+    assert response.status_code == 200
+    if accept == "application/json":
+        children = response.json()["child_collections"]
+        assert [child["id"] for child in children] == [second]
+        assert children[0].get("child_collections") is None
+    else:
+        assert resource(response.json())["dcat:catalog"] == [
+            {
+                "@id": f"http://testserver/collections/{second}",
+                "@type": "dcat:Catalog",
+                "dct:title": "second",
+            }
+        ]
 
 
 def test_collection_jsonld_response(

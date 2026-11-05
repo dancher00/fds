@@ -502,7 +502,7 @@ class CollectionService(BaseService[Collection, CollectionCreate, CollectionUpda
         Enforces write authorization on the parent Collection's scope. Raises
         ``ResourceNotFoundError`` if either Collection does not exist,
         ``ConflictError`` if the child is already nested, and
-        ``FDSValidationError`` if adding the child would create a self-reference.
+        ``FDSValidationError`` if adding the child would create a cycle.
         """
         if parent_id == child_id:
             raise FDSValidationError("A Collection cannot contain itself")
@@ -523,10 +523,37 @@ class CollectionService(BaseService[Collection, CollectionCreate, CollectionUpda
                 f"Collection {child_id} is already a child of Collection {parent_id}"
             )
 
+        if self._contains_collection(child_id, parent_id):
+            raise FDSValidationError("Nesting these Collections would create a cycle")
+
         membership = CollectionMember(parent_id=parent_id, child_id=child_id)
         self.session.add(membership)
         self.session.commit()
         return membership
+
+    def _contains_collection(self, collection_id: int, descendant_id: int) -> bool:
+        """Whether a collection contains another at any depth.
+
+        Walk membership links directly: read filtering or paging must not hide
+        a path back to the proposed parent. The visited set keeps the walk finite
+        over cycles already stored before validation was introduced.
+        """
+        seen: set[int] = set()
+        frontier = [collection_id]
+        while frontier:
+            current = frontier.pop()
+            if current == descendant_id:
+                return True
+            if current in seen:
+                continue
+            seen.add(current)
+            children = self.session.exec(
+                select(CollectionMember.child_id).where(
+                    CollectionMember.parent_id == current
+                )
+            ).all()
+            frontier.extend(children)
+        return False
 
     def remove_child_collection(
         self, parent_id: int, child_id: int, user: AuthenticatedUser
