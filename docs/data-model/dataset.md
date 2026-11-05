@@ -4,14 +4,9 @@ The core discovery object. A **Dataset** is the abstract metadata entity describ
 
 ## Dataset
 
-Renaming a dataset with `PATCH` uses the same uniqueness rules as creating it:
-a duplicate name in the same device/shot context returns 409. Different
-activities may produce datasets with the same name; datasets without an
-activity may share a name when they come from different catalogue origins.
-
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `name` | string | Yes | Short name, unique within its scope (e.g. `equilibrium`) |
+| `name` | string | Yes | Short name, unique within its scope (e.g. `equilibrium`). Renaming follows creation uniqueness rules: conflicts within the same device/shot context return 409. Different activities, or different catalogue origins for datasets without an activity, may share a name. `PATCH` rejects `null` with 422 |
 | `url` | string | No | Physical location (`s3://`, `gs://`, `az://`), taken from the primary Distribution and absent if none exists yet |
 | `group` | string | No | Group inside the file at `url` that holds the dataset, taken from the primary Distribution |
 | `ref` | string | No | Point in the history of the store at `url` that holds the data, such as an Icechunk tag, taken from the primary Distribution |
